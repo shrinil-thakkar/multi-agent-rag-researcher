@@ -1,10 +1,11 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 UTILS_DIR = Path(__file__).resolve().parents[1] / "utils"
 ENV_FILE_PATH = UTILS_DIR / "var.env"
@@ -12,32 +13,32 @@ ENV_FILE_PATH = UTILS_DIR / "var.env"
 load_dotenv(ENV_FILE_PATH)
 
 @lru_cache(maxsize=1)
-def get_openai_client() -> OpenAI:
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def get_genai_client() -> genai.Client:
+    return genai.Client(
+        vertexai=True,
+        project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION"),
+    )
 
 """ helper function to be used by the agents to run the LLM """
 def run_model(
         *,
         instructions: str,
-        input_data: Any,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        previous_response_id: Optional[str] = None,
+        contents: List[types.Content],
+        tools: Optional[List[types.Tool]] = None,
         model: str = None,
-        reasoning_effort: Optional[str] = None,
-        text_format: Any = None,
-):
-    client = get_openai_client()
-    request = dict(
+        thinking_budget: Optional[int] = None,
+) -> types.GenerateContentResponse:
+    client = get_genai_client()
+    config_kwargs: dict[str, Any] = {"system_instruction": instructions}
+    if tools:
+        config_kwargs["tools"] = tools
+        config_kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=True)
+    if thinking_budget is not None:
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
+
+    return client.models.generate_content(
         model=model,
-        instructions=instructions,
-        input=input_data,
-        tools=tools or [],
-        tool_choice="auto",
-        previous_response_id=previous_response_id,
-        parallel_tool_calls=False,
+        contents=contents,
+        config=types.GenerateContentConfig(**config_kwargs),
     )
-    if reasoning_effort:
-        request["reasoning"] = {"effort": reasoning_effort}
-    if text_format is not None:
-        return client.responses.parse(**request, text_format=text_format)
-    return client.responses.create(**request)

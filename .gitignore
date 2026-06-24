@@ -137,6 +137,12 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+utils/var.env
+
+# Runtime-generated app data
+utils/memory.db
+utils/qdrant_storage/
+utils/indexed_documents.json
 .venv
 env/
 agent_env/

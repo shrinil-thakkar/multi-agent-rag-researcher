@@ -1,13 +1,15 @@
 import atexit
 from functools import lru_cache
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 from qdrant_client import models
@@ -34,6 +36,16 @@ load_dotenv(ENV_FILE_PATH)
 @lru_cache(maxsize=1)
 def get_qdrant_client() -> QdrantClient:
     return QdrantClient(path=str(QDRANT_STORAGE_PATH))
+
+
+# get shared genai client for embeddings
+@lru_cache(maxsize=1)
+def get_genai_client() -> genai.Client:
+    return genai.Client(
+        vertexai=True,
+        project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION"),
+    )
 
 
 # close cached qdrant client on shutdown
@@ -171,20 +183,44 @@ OVERSAMPLE_FACTOR = 8
 MIN_FETCH_LIMIT = 20
 
 EMBEDDING_MODELS = {
-    "small": {"name": "text-embedding-3-small", "size": 1536},
-    "large": {"name": "text-embedding-3-large", "size": 3072},
+    "small": {"name": "gemini-embedding-001", "size": 768},
+    "large": {"name": "gemini-embedding-001", "size": 3072},
 }
 EMBEDDING_MODEL_KEY = "small"
 EMBEDDING_MODEL_NAME = EMBEDDING_MODELS[EMBEDDING_MODEL_KEY]["name"]
 EMBEDDING_VECTOR_SIZE = EMBEDDING_MODELS[EMBEDDING_MODEL_KEY]["size"]
 
-embedding_model = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME)
+
+# embed a batch of document chunks for indexing
+def embed_documents(texts: list[str]) -> list[list[float]]:
+    response = get_genai_client().models.embed_content(
+        model=EMBEDDING_MODEL_NAME,
+        contents=texts,
+        config=types.EmbedContentConfig(
+            task_type="RETRIEVAL_DOCUMENT",
+            output_dimensionality=EMBEDDING_VECTOR_SIZE,
+        ),
+    )
+    return [embedding.values for embedding in response.embeddings]
+
+
+# embed a single query for similarity search
+def embed_query(text: str) -> list[float]:
+    response = get_genai_client().models.embed_content(
+        model=EMBEDDING_MODEL_NAME,
+        contents=text,
+        config=types.EmbedContentConfig(
+            task_type="RETRIEVAL_QUERY",
+            output_dimensionality=EMBEDDING_VECTOR_SIZE,
+        ),
+    )
+    return response.embeddings[0].values
 
 
 # create vector embeddings and qdrant payloads for chunks
 def create_document_embeddings(chunks: list[Any]) -> list[models.PointStruct]:
     texts = [chunk.page_content for chunk in chunks]
-    vectors = embedding_model.embed_documents(texts)
+    vectors = embed_documents(texts)
     return [
         models.PointStruct(
             id=str(uuid4()),
@@ -263,7 +299,7 @@ def similarity_search(
     if not client.collection_exists(COLLECTION_NAME):
         return []
 
-    query_vector = embedding_model.embed_query(query)
+    query_vector = embed_query(query)
     fetch_limit = max(max_results or 0, per_doc_topk * OVERSAMPLE_FACTOR, MIN_FETCH_LIMIT)
     points = client.query_points(
         collection_name=COLLECTION_NAME,

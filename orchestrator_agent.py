@@ -1,6 +1,6 @@
 from datetime import datetime
-import json
 from typing import Any, Dict
+from google.genai import types
 from memory import (
     build_evidence_context,
     get_session_context,
@@ -14,7 +14,7 @@ from worker_agents import (
     writer_agent,
 )
 """
-Orchestrator 
+Orchestrator
 =====================================================================================
 In the orchestrator tool schema there are 4 tools defined:
 3 agentic tools: (Retriever, Writer and Verifier).
@@ -38,98 +38,92 @@ proceed to writing and verification.
 """
 
 # Tool schema used by the orchestrator to coordinate worker agents.
-ORCHESTRATOR_TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "name": "reuse_cached_evidence",
-        "description": (
-            """Activate the cached evidence from the previous turn when it is still
-            clearly and directly relevant to the current query. Prefer this for
-            follow-up questions that rely on the same evidence. Do not use it when
-            the user asks for a different detail, angle, missing information, or a
-            new topic."""
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "Short explanation of why the cached evidence is still directly relevant.",
-                }
-            },
-            "required": ["reason"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "call_retriever_agent",
-        "description": (
-            """Gather evidence for the current query. Use this for evidence-request
-            turns when cached evidence is missing, not clearly relevant, or the
-            user asks for a different detail, angle, or missing information. This
-            worker decides whether to use uploaded documents, web search, or both."""
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Self-contained evidence request for the retriever. Rewrite follow-up questions to include omitted subject details when needed.",
-                }
-            },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "call_writer_agent",
-        "description": (
-            """Write the report using the active retrieved evidence. Use only after
-            evidence has been activated for the current turn."""
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "user_query": {
-                    "type": "string",
-                    "description": "The current user request to answer.",
+ORCHESTRATOR_TOOL_SCHEMAS = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="reuse_cached_evidence",
+            description=(
+                """Activate the cached evidence from the previous turn when it is still
+                clearly and directly relevant to the current query. Prefer this for
+                follow-up questions that rely on the same evidence. Do not use it when
+                the user asks for a different detail, angle, missing information, or a
+                new topic."""
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Short explanation of why the cached evidence is still directly relevant.",
+                    }
                 },
-                "evidence_text": {
-                    "type": "string",
-                    "description": "The active formatted evidence to ground the draft.",
-                },
+                "required": ["reason"],
             },
-            "required": ["user_query", "evidence_text"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "call_verifier_agent",
-        "description": (
-            """Verify whether the report draft is grounded in the active evidence and
-            return the final report. Use only after a writer draft exists and
-            evidence is active for the current turn."""
         ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "written_draft": {
-                    "type": "string",
-                    "description": "The writer agent's draft to verify.",
+        types.FunctionDeclaration(
+            name="call_retriever_agent",
+            description=(
+                """Gather evidence for the current query. Use this for evidence-request
+                turns when cached evidence is missing, not clearly relevant, or the
+                user asks for a different detail, angle, or missing information. This
+                worker decides whether to use uploaded documents, web search, or both."""
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Self-contained evidence request for the retriever. Rewrite follow-up questions to include omitted subject details when needed.",
+                    }
                 },
-                "evidence_text": {
-                    "type": "string",
-                    "description": "The active formatted evidence used to check the draft.",
-                },
+                "required": ["query"],
             },
-            "required": ["written_draft", "evidence_text"],
-            "additionalProperties": False,
-        },
-    },
-]
+        ),
+        types.FunctionDeclaration(
+            name="call_writer_agent",
+            description=(
+                """Write the report using the active retrieved evidence. Use only after
+                evidence has been activated for the current turn."""
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "user_query": {
+                        "type": "string",
+                        "description": "The current user request to answer.",
+                    },
+                    "evidence_text": {
+                        "type": "string",
+                        "description": "The active formatted evidence to ground the draft.",
+                    },
+                },
+                "required": ["user_query", "evidence_text"],
+            },
+        ),
+        types.FunctionDeclaration(
+            name="call_verifier_agent",
+            description=(
+                """Verify whether the report draft is grounded in the active evidence and
+                return the final report. Use only after a writer draft exists and
+                evidence is active for the current turn."""
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "written_draft": {
+                        "type": "string",
+                        "description": "The writer agent's draft to verify.",
+                    },
+                    "evidence_text": {
+                        "type": "string",
+                        "description": "The active formatted evidence used to check the draft.",
+                    },
+                },
+                "required": ["written_draft", "evidence_text"],
+            },
+        ),
+    ]
+)
 
 # Instructions guiding the LLM's behavior in Orchestrator
 ORCHESTRATOR_INSTRUCTIONS = (
@@ -161,8 +155,8 @@ ORCHESTRATOR_INSTRUCTIONS = (
     - Return the verifier output when available.
     """
 )
-ORCHESTRATOR_MODEL = "gpt-5.4-mini"
-ORCHESTRATOR_REASONING_EFFORT = "low"
+ORCHESTRATOR_MODEL = "gemini-2.5-flash"
+ORCHESTRATOR_THINKING_BUDGET = 0
 
 # Format the current orchestration state for the model.
 def build_orchestrator_prompt_context(state: dict[str, Any]) -> str:
@@ -198,7 +192,7 @@ def orchestrator_agent(
     session_id: str = "default",
     verbose: bool = True,
 ) -> Dict[str, Any]:
-    
+
     # Load session context for follow-up questions and cached evidence reuse.
     session_context = get_session_context(session_id)
     cached_evidence_json = session_context["cached_evidence_json"]
@@ -220,32 +214,50 @@ def orchestrator_agent(
     }
     evidence_already_active = "Evidence is already active for this turn; proceed to writing."
 
+    # Caller-owned conversation history. Gemini has no server-side
+    # equivalent of OpenAI's previous_response_id, so every round must
+    # be appended here and sent in full on the next call.
+    contents = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(
+                    text=(
+                        f"User query: {user_query}\n\n"
+                        f"Current state:\n{build_orchestrator_prompt_context(state)}"
+                    )
+                )
+            ],
+        )
+    ]
+
     response = run_model(
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=ORCHESTRATOR_MODEL,
-        reasoning_effort=ORCHESTRATOR_REASONING_EFFORT,
-        input_data=(
-            f"User query: {user_query}\n\n"
-            f"Current state:\n{build_orchestrator_prompt_context(state)}"
-        ),
-        tools=ORCHESTRATOR_TOOL_SCHEMAS,
+        thinking_budget=ORCHESTRATOR_THINKING_BUDGET,
+        contents=contents,
+        tools=[ORCHESTRATOR_TOOL_SCHEMAS],
     )
 
     # Allow up to 4 orchestration rounds before stopping.
     for _ in range(4):
-        function_calls = [item for item in response.output if item.type == "function_call"]
+        function_calls = response.function_calls
 
         # If the model does not request any tools, return its direct reply.
         if not function_calls:
-            state["final_answer"] = response.output_text or "I couldn't find enough evidence to answer that."
+            state["final_answer"] = response.text or "I couldn't find enough evidence to answer that."
             save_last_user_query(session_id, user_query)
             return state
 
-        tool_outputs = []
+        # Carry the model's own turn (including its function-call parts)
+        # forward before appending the function-response turn.
+        contents.append(response.candidates[0].content)
+
+        function_response_parts = []
 
         for call in function_calls:
             name = call.name
-            args = json.loads(call.arguments)
+            args = call.args
 
             if name == "reuse_cached_evidence":
                 if state["evidence_json"]:
@@ -320,28 +332,30 @@ def orchestrator_agent(
             else:
                 output = "Unknown tool name."
 
-            tool_outputs.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": call.call_id,
-                    "output": output,
-                }
+            function_response_parts.append(
+                types.Part.from_function_response(name=name, response={"result": output})
             )
+
+        # Finalize as soon as verification is in hand instead of spending
+        # another round asking the model to relay it back: that extra
+        # round-trip risks the model paraphrasing or blending in the
+        # writer's draft rather than returning the verifier output verbatim.
+        if state["verification"]:
+            state["final_answer"] = state["verification"]
+            save_last_user_query(session_id, user_query)
+            return state
+
+        function_response_parts.append(
+            types.Part.from_text(text=f"Updated state:\n{build_orchestrator_prompt_context(state)}")
+        )
+        contents.append(types.Content(role="user", parts=function_response_parts))
 
         response = run_model(
             instructions=ORCHESTRATOR_INSTRUCTIONS,
             model=ORCHESTRATOR_MODEL,
-            reasoning_effort=ORCHESTRATOR_REASONING_EFFORT,
-            input_data=[
-                *tool_outputs,
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": f"Updated state:\n{build_orchestrator_prompt_context(state)}",
-                },
-            ],
-            tools=ORCHESTRATOR_TOOL_SCHEMAS,
-            previous_response_id=response.id,
+            thinking_budget=ORCHESTRATOR_THINKING_BUDGET,
+            contents=contents,
+            tools=[ORCHESTRATOR_TOOL_SCHEMAS],
         )
 
     if state["verification"]:

@@ -1,6 +1,6 @@
-import json
 import os
 from typing import Any, Dict, Literal, Optional
+from google.genai import types
 from pydantic import BaseModel
 from memory import infer_route_used
 from qdrant_vector_database import get_indexed_document_catalog, similarity_search
@@ -8,9 +8,9 @@ from .model_runner import run_model
 from tavily import TavilyClient
 
 """
-Retriever Agent 
+Retriever Agent
 =====================================================================================
-It used by the Orchestrator for information retrieval. 
+It used by the Orchestrator for information retrieval.
 It uses two tools: document retrieval and web search.
 
 Given a query, it decides whether to retrieve evidence from the indexed PDFs,
@@ -20,7 +20,7 @@ If local document evidence is weak or missing, it can fall back to web search
 to gather broader context.
 """
 
-tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY")) 
+tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 # Structured output returned by the retriever agent.
 class ResearchEvidencePack(BaseModel):
@@ -89,72 +89,68 @@ def web_search(query: str, num_results: int = 5) -> Dict[str, Any]:
         return {"query": query, "results": []}
 
 
-RETRIEVER_MODEL = "gpt-5.4-mini"
-RETRIEVER_REASONING_EFFORT = "low"
+RETRIEVER_MODEL = "gemini-2.5-flash"
+RETRIEVER_THINKING_BUDGET = 0
 
 # Guides the retriever agent on how to interact with the available tools
 # (document retrieval and web search).
-RETRIEVER_TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "name": "retrieve_document",
-        "description": (
-            """Search the indexed PDF corpus and return the most relevant chunks with
-            document names, titles, page numbers, exact citation strings, and
-            scores. Preserve the returned document names, titles, page numbers, and
-            citation strings because they are needed downstream for accurate PDF
-            citations in the final answer. Prefer this when the query is plausibly
-            covered by the uploaded PDFs, is closely related to the indexed document
-            titles or topics, when the user explicitly asks about the uploaded PDFs,
-            or when document-grounded evidence is needed."""
-        ),
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": (
-                        "Rewrite the user's request into a self-contained search query "
-                        "for the indexed PDFs. Include omitted subject details from "
-                        "follow-up context when needed."
-                    ),
+RETRIEVER_TOOL_SCHEMAS = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="retrieve_document",
+            description=(
+                """Search the indexed PDF corpus and return the most relevant chunks with
+                document names, titles, page numbers, exact citation strings, and
+                scores. Preserve the returned document names, titles, page numbers, and
+                citation strings because they are needed downstream for accurate PDF
+                citations in the final answer. Prefer this when the query is plausibly
+                covered by the uploaded PDFs, is closely related to the indexed document
+                titles or topics, when the user explicitly asks about the uploaded PDFs,
+                or when document-grounded evidence is needed."""
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Rewrite the user's request into a self-contained search query "
+                            "for the indexed PDFs. Include omitted subject details from "
+                            "follow-up context when needed."
+                        ),
+                    },
                 },
+                "required": ["query"],
             },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "web_search",
-        "description": (
-            """Search the web for recent, changing, external, or clearly non-PDF
-            information and return concise results with exact source titles, exact
-            URLs, and source metadata. Preserve the returned titles and URLs because
-            they are needed downstream for accurate web citations in the final
-            answer. Prefer this when the query does not match the indexed document
-            titles or topics, when external or current evidence is needed, or after
-            document retrieval is empty or insufficient."""
         ),
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": (
-                        "Rewrite the user's request into a self-contained web search "
-                        "query. Include omitted subject details from follow-up context "
-                        "when needed."
-                    ),
+        types.FunctionDeclaration(
+            name="web_search",
+            description=(
+                """Search the web for recent, changing, external, or clearly non-PDF
+                information and return concise results with exact source titles, exact
+                URLs, and source metadata. Preserve the returned titles and URLs because
+                they are needed downstream for accurate web citations in the final
+                answer. Prefer this when the query does not match the indexed document
+                titles or topics, when external or current evidence is needed, or after
+                document retrieval is empty or insufficient."""
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Rewrite the user's request into a self-contained web search "
+                            "query. Include omitted subject details from follow-up context "
+                            "when needed."
+                        ),
+                    },
                 },
+                "required": ["query"],
             },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    },
-]
+        ),
+    ]
+)
 
 # Instructions guiding the LLM's behavior in retriever agent
 RETRIEVER_INSTRUCTIONS = """
@@ -179,8 +175,6 @@ def retriever_agent(
     last_user_query: str = "",
     verbose: bool = False,
 ) -> ResearchEvidencePack:
-    
-    previous_response_id: Optional[str] = None
 
     # Expose indexed document titles so the model can judge whether the PDFs
     # are relevant before choosing a retrieval tool.
@@ -189,11 +183,17 @@ def retriever_agent(
         f"- {item['title']} (file: {item['file_name']})"
         for item in document_catalog
     ) or "- None"
-    pending_input: Any = (
+    initial_prompt = (
         f"Current user query: {user_query.strip()}\n"
         f"Last user query: {last_user_query.strip() or 'None'}\n"
         f"Indexed document titles and topic hints:\n{indexed_documents_text}"
     )
+
+    # Caller-owned conversation history. Gemini has no server-side
+    # equivalent of OpenAI's previous_response_id, so every round must
+    # be appended here and sent in full on the next call.
+    contents = [types.Content(role="user", parts=[types.Part.from_text(text=initial_prompt)])]
+
     document_evidence: Optional[Dict[str, Any]] = None
     web_evidence: Optional[Dict[str, Any]] = None
     summary = ""
@@ -202,25 +202,25 @@ def retriever_agent(
     for _ in range(4):
         response = run_model(
             instructions=RETRIEVER_INSTRUCTIONS,
-            input_data=pending_input,
+            contents=contents,
             model=RETRIEVER_MODEL,
-            tools=RETRIEVER_TOOL_SCHEMAS,
-            previous_response_id=previous_response_id,
-            reasoning_effort=RETRIEVER_REASONING_EFFORT,
+            tools=[RETRIEVER_TOOL_SCHEMAS],
+            thinking_budget=RETRIEVER_THINKING_BUDGET,
         )
-        previous_response_id = response.id
 
-        tool_results = []
-        function_calls = [item for item in response.output if item.type == "function_call"]
+        function_calls = response.function_calls
 
         if not function_calls:
             # If the model stops calling tools, treat its final text as the
             # retriever-facing summary for this turn.
-            summary = (response.output_text or "").strip()
+            summary = (response.text or "").strip()
             break
 
+        contents.append(response.candidates[0].content)
+
+        function_response_parts = []
         for call in function_calls:
-            query = json.loads(call.arguments)["query"].strip()
+            query = call.args["query"].strip()
 
             if call.name == "retrieve_document":
                 if verbose:
@@ -235,15 +235,11 @@ def retriever_agent(
                 if function_response.get("results"):
                     web_evidence = function_response
 
-            tool_results.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": call.call_id,
-                    "output": json.dumps(function_response),
-                }
+            function_response_parts.append(
+                types.Part.from_function_response(name=call.name, response=function_response)
             )
 
-        pending_input = tool_results
+        contents.append(types.Content(role="user", parts=function_response_parts))
 
     document_chunks = document_evidence.get("chunks") if document_evidence else []
     web_results = web_evidence.get("results") if web_evidence else []

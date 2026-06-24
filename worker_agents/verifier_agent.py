@@ -1,7 +1,7 @@
+from google.genai import types
 from .model_runner import run_model
 
-VERIFIER_MODEL = "gpt-5.4"
-VERIFIER_REASONING_EFFORT = "low"
+VERIFIER_MODEL = "gemini-2.5-pro"
 
 """
 Verifier Agent
@@ -53,9 +53,8 @@ def verifier_agent(
 
     response = run_model(
         instructions=instructions,
-        input_data=input_text,
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=input_text)])],
         model=VERIFIER_MODEL,
-        reasoning_effort=VERIFIER_REASONING_EFFORT,
         tools=None,
     )
-    return response.output_text
+    return response.text

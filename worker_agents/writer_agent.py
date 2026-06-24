@@ -1,7 +1,7 @@
+from google.genai import types
 from .model_runner import run_model
 
-WRITER_MODEL = "gpt-5.4"
-WRITER_REASONING_EFFORT = "low"
+WRITER_MODEL = "gemini-2.5-pro"
 
 """
 Writer Agent 
@@ -41,9 +41,8 @@ def writer_agent(user_query: str, evidence_text: str, verbose: bool = False) -> 
 
     response = run_model(
         instructions=instructions,
-        input_data=input_text,
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=input_text)])],
         model=WRITER_MODEL,
-        reasoning_effort=WRITER_REASONING_EFFORT,
         tools=None,
     )
-    return response.output_text
+    return response.text

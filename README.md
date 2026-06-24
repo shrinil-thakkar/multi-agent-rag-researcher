@@ -11,7 +11,7 @@ The three worker agents are:
 
 ## Key Components
 
-1. `gpt-5.4` model used by the orchestrator and all worker agents
+1. Gemini models on Vertex AI: `gemini-2.5-flash` for the orchestrator and retriever agent, `gemini-2.5-pro` for the writer and verifier agents
 2. Step-by-step function calling that allows the agents to interact with one another
 3. Qdrant vector database for local PDF retrieval
 4. Tavily for web search
@@ -114,7 +114,8 @@ Note: The orchestrator has a guardrail that keeps the system focused on research
 ### Prerequisites
 
 - Python 3.10 or newer
-- OpenAI API key
+- A Google Cloud project with billing enabled, and the Vertex AI API enabled (`gcloud services enable aiplatform.googleapis.com`)
+- The `gcloud` CLI installed and authenticated locally via `gcloud auth application-default login` (this sets up the credentials the app uses automatically; no API key needed)
 - Tavily API key
 
 ### Installation
@@ -137,13 +138,14 @@ source env/bin/activate
 
 ```bash
 pip3 install -r utils/requirements.txt
-pip3 install langchain-openai
 ```
 
-4. Create a `utils/var.env` file and store your API keys:
+4. Create a `utils/var.env` file with your Google Cloud project details and API keys:
 
 ```env
-OPENAI_API_KEY=your_openai_api_key
+GOOGLE_GENAI_USE_VERTEXAI=true
+GOOGLE_CLOUD_PROJECT=your_gcp_project_id
+GOOGLE_CLOUD_LOCATION=us-central1
 TAVILY_API_KEY=your_tavily_api_key
 ```
 
